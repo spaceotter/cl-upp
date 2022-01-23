@@ -6,7 +6,16 @@
 
 (defun adjust-symbol (name)
   "C convention to Common Lisp name convention"
-  (substitute #\- #\_ (string-upcase name)))
+  (let ((upcase (string-upcase name)))
+    ;; T as a symbol conflicts with lisp
+    (if (string= upcase "T") "-T"
+        (substitute #\- #\_ upcase))))
+
+(define-condition unsupported-c++-type (error)
+  ((c++-type :initarg :type
+             :initform nil
+             :reader c++-type))
+  (:documentation "The c++ type is not supported in ECL"))
 
 (defun read-builtin (obj)
   (if (from-json-bool (getjso "float" obj))
@@ -16,26 +25,37 @@
         (128 :long-double))
       (if (from-json-bool (getjso "signed" obj))
           (case (getjso "bits" obj)
-            (8 :byte)
+            ;; void manifests as a 0-bit builtin
+            (8 :char)
             (16 :int16-t)
             (32 :int32-t)
             (64 :int64-t)
+            ;; 128-bit numbers are unsupported for now.
+            (128 (error 'unsupported-c++-type :type obj))
             (otherwise :void))
           (case (getjso "bits" obj)
-            (8 :unsigned-byte)
+            (8 :unsigned-char)
             (16 :uint16-t)
             (32 :uint32-t)
             (64 :uint64-t)
+            (128 (error 'unsupported-c++-type :type obj))
             (otherwise :void)))))
 
 (defun read-type (obj)
   (let ((kind (getjso "kind" obj)))
     (cond ((string= kind "Builtin") (read-builtin obj))
+          ((string= kind "Enum") (read-builtin obj))
           ((string= kind "Pointer")
            (let ((pointee (getjso "pointee" obj)))
              (if (string= "Record" (getjso "kind" pointee))
                  :pointer-void
-                 `(* ,(read-type pointee)))))
+                 (let ((pointee-type (read-type pointee)))
+                   (case pointee-type
+                     ;; This notation only seems to work properly for char*
+                     ((:char :unsigned-char)
+                      `(* ,pointee-type))
+                     (otherwise :pointer-void))
+                   ))))
           (t :unknown-kind))))
 
 (defun read-function (name obj)
@@ -65,10 +85,13 @@
     ;; declare the foreign C function
     (setq count 0)
     (mapjso #'(lambda (key value)
-                (let ((code (read-function key value)))
-                  (format dump ";; Function #~A: ~A~%~S~%" count key code)
-                  (incf count)
-                  (push code output)))
+                (format dump ";; Function #~A: ~A~%" count key)
+                (incf count)
+                (handler-case
+                    (let ((code (read-function key value)))
+                      (format dump "~S~%" code)
+                      (push code output))
+                  (unsupported-c++-type (e) (format dump ";; Unsupported~%"))))
             functions)
     (push `(ffi:clines ,(format nil "#include <~A>" header)) output)
     (push 'progn output)

@@ -26,7 +26,7 @@
       (if (from-json-bool (getjso "signed" obj))
           (case (getjso "bits" obj)
             ;; void manifests as a 0-bit builtin
-            (8 :char)
+            (8 (if (from-json-bool (getjso "char" obj)) :char :byte))
             (16 :int16-t)
             (32 :int32-t)
             (64 :int64-t)
@@ -34,7 +34,7 @@
             (128 (error 'unsupported-c++-type :type obj))
             (otherwise :void))
           (case (getjso "bits" obj)
-            (8 :unsigned-char)
+            (8 (if (from-json-bool (getjso "char" obj)) :unsigned-char :unsigned-byte))
             (16 :uint16-t)
             (32 :uint32-t)
             (64 :uint64-t)
